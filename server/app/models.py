@@ -12,6 +12,47 @@ from pydantic import BaseModel
 from config import *
 
 
+class ExecutionStrategy(ABC, BaseModel):
+    @property
+    @classmethod
+    @abstractmethod
+    def preprocess_timeout(cls) -> float:
+        """Timeout for the preprocessing step in seconds"""
+        raise NotImplementedError()
+
+    @property
+    @classmethod
+    @abstractmethod
+    def train_timeout(cls) -> float:
+        """Timeout for the training step in seconds"""
+        raise NotImplementedError()
+
+    @property
+    @classmethod
+    @abstractmethod
+    def render_timeout(cls) -> float:
+        """Timeout for the rendering step in seconds"""
+        raise NotImplementedError()
+
+    @staticmethod
+    @abstractmethod
+    async def preprocess(task):
+        """Run preprocessing on task"""
+        raise NotImplementedError()
+
+    @staticmethod
+    @abstractmethod
+    async def train(task):
+        """Run training on task"""
+        raise NotImplementedError()
+
+    @staticmethod
+    @abstractmethod
+    async def render(task):
+        """Run render on task"""
+        raise NotImplementedError()
+
+
 class TaskStatus(Enum):
     QUEUED = 0
     PREPROCESSING = 1
@@ -26,8 +67,9 @@ class Task(BaseModel):
     created_at: datetime
     status: TaskStatus
     error: Union[str, None]
+    execution_strategy: ExecutionStrategy
 
-    def upload_files(self, files: List[UploadFile]):
+    def upload_images(self, files: List[UploadFile]):
         images_dir = self.images_dir()
         if not path.isdir(images_dir):
             makedirs(images_dir, exist_ok=True)
@@ -35,6 +77,14 @@ class Task(BaseModel):
             filename = f'image-{i}.jpg'
             with open(path.join(images_dir, filename), 'wb+') as f:
                 f.write(file.file.read())
+    
+    def upload_video(self, video: UploadFile):
+        images_dir = self.images_dir()
+        if not path.isdir(images_dir):
+            makedirs(images_dir, exist_ok=True)
+        with open(self.input_video_file(), 'wb+') as f:
+            f.write(video.file.read())
+        os.system(f"ffmpeg -i {self.input_video_file()} -qscale:v 1 -qmin 1 -vf \"fps=2\" {self.images_dir()}/%04d.jpg")
 
     def task_dir(self):
         return path.join(tasks_dir, str(self.id))
@@ -51,25 +101,28 @@ class Task(BaseModel):
     def log_file(self):
         return path.join(self.task_dir(), 'log.txt')
 
-    def output_file(self):
+    def output_video_file(self):
         return path.join(self.task_dir(), 'output', 'render_output.mp4')
 
+    def input_video_file(self):
+        return path.join(self.task_dir(), 'input_video.mp4')
+
     @staticmethod
-    def new():
+    def new(execution_strategy: ExecutionStrategy):
         return Task(
             id=str(uuid4()),
             status=TaskStatus.QUEUED,
             created_at=datetime.now(),
-            error=None)
+            error=None,
+            execution_strategy=execution_strategy)
 
 
 class TaskManager:
     """Keep track of current tasks and process the tasks in the queue"""
 
-    def __init__(self, execution_strategy: Type['ExecutionStrategy']):
+    def __init__(self):
         self.tasks: Dict[str, Task] = dict()
         self.queue: asyncio.Queue[Task] = asyncio.Queue(maxsize=10)
-        self.execution_strategy = execution_strategy
         asyncio.get_event_loop()
         self.exec_task = asyncio.create_task(self._execute())
 
@@ -109,16 +162,16 @@ class TaskManager:
             try:
                 task.status = TaskStatus.PREPROCESSING
                 await asyncio.wait_for( 
-                        await self.execution_strategy.preprocess(task),
-                        timeout=self.execution_strategy.preprocess_timeout)
+                        await task.execution_strategy.preprocess(task),
+                        timeout=task.execution_strategy.preprocess_timeout)
                 task.status = TaskStatus.TRAINING
                 await asyncio.wait_for( 
-                        await self.execution_strategy.train(task),
-                        self.execution_strategy.train_timeout)
+                        await task.execution_strategy.train(task),
+                        task.execution_strategy.train_timeout)
                 task.status = TaskStatus.RENDERING
                 await asyncio.wait_for( 
-                        await self.execution_strategy.render(task),
-                        self.execution_strategy.render_timeout)
+                        await task.execution_strategy.render(task),
+                        task.execution_strategy.render_timeout)
                 task.status = TaskStatus.DONE
                 print("done running task")
             except asyncio.TimeoutError:
@@ -133,47 +186,6 @@ class TaskManager:
             except:
                 task.error = "Unknown"
                 task.status = TaskStatus.FAILED
-
-
-class ExecutionStrategy(ABC):
-    @property
-    @classmethod
-    @abstractmethod
-    def preprocess_timeout(cls) -> float:
-        """Timeout for the preprocessing step in seconds"""
-        raise NotImplementedError()
-
-    @property
-    @classmethod
-    @abstractmethod
-    def train_timeout(cls) -> float:
-        """Timeout for the training step in seconds"""
-        raise NotImplementedError()
-
-    @property
-    @classmethod
-    @abstractmethod
-    def render_timeout(cls) -> float:
-        """Timeout for the rendering step in seconds"""
-        raise NotImplementedError()
-
-    @staticmethod
-    @abstractmethod
-    async def preprocess(task):
-        """Run preprocessing on task"""
-        raise NotImplementedError()
-
-    @staticmethod
-    @abstractmethod
-    async def train(task):
-        """Run training on task"""
-        raise NotImplementedError()
-
-    @staticmethod
-    @abstractmethod
-    async def render(task):
-        """Run render on task"""
-        raise NotImplementedError()
 
 
 class NerfactoStrategy(ExecutionStrategy):
@@ -225,3 +237,102 @@ class NerfactoStrategy(ExecutionStrategy):
         if status != 0:
             raise RuntimeError()
 
+
+class InstantNGPStrategy(ExecutionStrategy):
+    @property
+    @classmethod
+    def preprocess_timeout(cls):
+        return 60 * 20  # 20 minutes
+
+    @property
+    @classmethod
+    def train_timeout(cls):
+        return 60 * 5  # 5 minutes
+
+    @property
+    @classmethod
+    def render_timeout(cls):
+        return 60 * 5  # 5 minutes
+
+    @staticmethod
+    async def preprocess(task: Task):
+        # TODO: redirect stdout and stderr to log file
+        proc = await asyncio.create_subprocess_exec(
+                "python3.8", 
+                path.join(path.curdir, 'scripts', 'colmap2nerf.py'),
+                f"--images {task.images_dir()}", 
+                f"--out {task.dataset_dir()}", 
+                "--colmap_matcher exhaustive", 
+                "--run_colmap",
+                "--aabb_scale 16")
+        status = await proc.wait()
+        if status != 0:
+            raise RuntimeError()
+
+    @staticmethod
+    async def train(task: Task):
+        proc = await asyncio.create_subprocess_exec(
+                "ns-train", 
+                "instant-ngp"
+                f"--data {task.dataset_dir()}",
+                f"--output-dir {task.model_dir()}")
+        status = await proc.wait()
+        if status != 0:
+            raise RuntimeError()
+
+    @staticmethod
+    async def render(task: Task):
+        proc = await asyncio.create_subprocess_exec("echo", "preprocess")
+        status = await proc.wait()
+        if status != 0:
+            raise RuntimeError()
+
+
+class VanillaNerfStrategy(ExecutionStrategy):
+    @property
+    @classmethod
+    def preprocess_timeout(cls):
+        return 60 * 20  # 20 minutes
+
+    @property
+    @classmethod
+    def train_timeout(cls):
+        return 60 * 5  # 5 minutes
+
+    @property
+    @classmethod
+    def render_timeout(cls):
+        return 60 * 5  # 5 minutes
+
+    @staticmethod
+    async def preprocess(task: Task):
+        # TODO: redirect stdout and stderr to log file
+        proc = await asyncio.create_subprocess_exec(
+                "python3.8", 
+                path.join(path.curdir, 'scripts', 'colmap2nerf.py'),
+                f"--images {task.images_dir()}", 
+                f"--out {task.dataset_dir()}", 
+                "--colmap_matcher exhaustive", 
+                "--run_colmap",
+                "--aabb_scale 16")
+        status = await proc.wait()
+        if status != 0:
+            raise RuntimeError()
+
+    @staticmethod
+    async def train(task: Task):
+        proc = await asyncio.create_subprocess_exec(
+                "ns-train", 
+                "vanilla-nerf"
+                f"--data {task.dataset_dir()}",
+                f"--output-dir {task.model_dir()}")
+        status = await proc.wait()
+        if status != 0:
+            raise RuntimeError()
+
+    @staticmethod
+    async def render(task: Task):
+        proc = await asyncio.create_subprocess_exec("echo", "preprocess")
+        status = await proc.wait()
+        if status != 0:
+            raise RuntimeError()

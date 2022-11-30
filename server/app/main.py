@@ -15,7 +15,7 @@ manager: TaskManager
 @app.on_event("startup")
 async def startup_event():
     global manager
-    manager = TaskManager(NerfactoStrategy)
+    manager = TaskManager()
 
 
 @app.on_event("shutdown")
@@ -59,11 +59,29 @@ async def get_task_output(task_id: str):
 
 @app.post("/tasks/")
 async def post_tasks(
-    files: List[UploadFile] = File(""),
+    images: List[UploadFile] = File(""),
+    video: UploadFile = File(""),
+    strategy: str = "nerfacto"
 ):
-    task = Task.new()
-    task.upload_files(files)
+    if strategy == "nerfacto":
+        task = Task.new(NerfactoStrategy)
+    elif strategy == "instant_ngp":
+        task = Task.new()
+        task = Task.new(InstantNGPStrategy)
+    elif stategy == "vanilla_nerf":
+        task = Task.new(VanillaNerfStrategy)
+    else:
+        raise HTTPException(status_code=400, detail="\"strategy\" must be either \"nerfacto\", \"instant_ngp\", \"vanilla_nerf\".")
+    
+    if images:
+        task.upload_images(images)
+    elif video:
+        task.upload_video(video)
+    else:
+        raise HTTPException(status_code=400, detail="The \"images\" or \"video\" field must contain data.")
+
     success = manager.add(task)
+
     if not success:
         raise HTTPException(
                 status_code=500, detail="Too many tasks queued. Try again later")
