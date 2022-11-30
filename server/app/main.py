@@ -1,12 +1,26 @@
-from typing import List
-
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from starlette.responses import JSONResponse
+
+from uvicorn.config import Config
+from uvicorn.main import Server
 
 from models import *
 from config import *
 
 app = FastAPI()
+
+manager: TaskManager
+
+@app.on_event("startup")
+async def startup_event():
+    global manager
+    manager = TaskManager(NerfactoStrategy)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    pass
 
 
 @app.get("/")
@@ -24,14 +38,23 @@ async def index():
 
 @app.get("/tasks", response_model=List[Task])
 async def get_tasks():
-    return []
+    return manager.list()
 
 
 @app.get("/tasks/{task_id}", response_model=Task)
 async def get_task(task_id: str):
-    if (task_id is None):
+    task = manager.get(UUID(task_id))
+    if not task:
         raise HTTPException(status_code=404, detail="task not found")
-    return task_id
+    return task
+
+
+@app.get("/tasks/{task_id}/output", response_model=Task)
+async def get_task_output(task_id: str):
+    task = manager.get(UUID(task_id))
+    if not task:
+        raise HTTPException(status_code=404, detail="task not found")
+    return FileResponse(task.output_file())
 
 
 @app.post("/tasks/")
@@ -40,5 +63,14 @@ async def post_tasks(
 ):
     task = Task.new()
     task.upload_files(files)
-    return task
+    success = manager.add(task)
+    if not success:
+        raise HTTPException(
+                status_code=500, detail="Too many tasks queued. Try again later")
+    return JSONResponse(status_code=201, content={'id': task.id})
 
+
+if __name__ == "__main__":
+    config = Config(app=app, loop="asyncio")
+    server = Server(config=config)
+    server.run()
