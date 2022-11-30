@@ -64,7 +64,7 @@ class Task(BaseModel):
 
 
 class TaskManager:
-    """Tracks current tasks and manage the task queue"""
+    """Keep track of current tasks and process the tasks in the queue"""
 
     def __init__(self, execution_strategy: Type['ExecutionStrategy']):
         self.tasks: Dict[str, Task] = dict()
@@ -103,7 +103,6 @@ class TaskManager:
 
     async def _execute(self):
         """Process tasks added to the task queue"""
-
         while True:
             task = await self.queue.get()
             print("running task")
