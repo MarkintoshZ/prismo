@@ -1,16 +1,17 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
-from starlette.responses import JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
 from uvicorn.config import Config
 from uvicorn.main import Server
 
 from models import *
-from config import *
+from task_manager import TaskManager
+
 
 app = FastAPI()
 
 manager: TaskManager
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -27,8 +28,15 @@ async def shutdown_event():
 async def index():
     content = """
     <body>
-    <form action="/tasks/" enctype="multipart/form-data" method="post">
-    <input name="files" type="file" multiple>
+    <form action="/tasks" enctype="multipart/form-data" method="post">
+    <label>
+        Input Video
+        <input name="file" type="file" accept="video/mp4">
+    </label>
+    <label>
+        Processing Strategy
+        <input name="strategy" value="nerfacto">
+    </label>
     <input type="submit">
     </form>
     </body>
@@ -43,45 +51,38 @@ async def get_tasks():
 
 @app.get("/tasks/{task_id}", response_model=Task)
 async def get_task(task_id: str):
-    task = manager.get(UUID(task_id))
+    task = manager.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
     return task
 
 
-@app.get("/tasks/{task_id}/output", response_model=Task)
+@app.get("/tasks/{task_id}/output")
 async def get_task_output(task_id: str):
-    task = manager.get(UUID(task_id))
+    task = manager.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
-    return FileResponse(task.output_file())
+    return FileResponse(task.output_video_file())
 
 
-@app.post("/tasks/")
+@app.post("/tasks")
 async def post_tasks(
-    images: List[UploadFile] = File(""),
-    video: UploadFile = File(""),
-    strategy: str = "nerfacto"
+    file: UploadFile = File(""),
+    strategy: ExecutionStrategy = "nerfacto"
 ):
-    if strategy == "nerfacto":
-        task = Task.new(NerfactoStrategy)
-    elif strategy == "instant_ngp":
-        task = Task.new()
-        task = Task.new(InstantNGPStrategy)
-    elif stategy == "vanilla_nerf":
-        task = Task.new(VanillaNerfStrategy)
+    if strategy in {"nerfacto", "instant_ngp", "vanilla_nerf"}:
+        task = Task.new(strategy)
     else:
-        raise HTTPException(status_code=400, detail="\"strategy\" must be either \"nerfacto\", \"instant_ngp\", \"vanilla_nerf\".")
-    
-    if images:
-        task.upload_images(images)
-    elif video:
-        task.upload_video(video)
+        raise HTTPException(status_code=400, detail='"strategy" must be either "nerfacto", "instant_ngp", "vanilla_nerf".')
+
+    if file.content_type in {"video/quicktime", "video/mp4"}:
+        task.upload_video(file)
+    elif file.content_type in {"img/jpeg"}:
+        task.upload_images(file)
     else:
-        raise HTTPException(status_code=400, detail="The \"images\" or \"video\" field must contain data.")
+        raise HTTPException(status_code=400, detail="Media type must be either \"video/quicktime\" or \"img/jpeg\"")
 
     success = manager.add(task)
-
     if not success:
         raise HTTPException(
                 status_code=500, detail="Too many tasks queued. Try again later")

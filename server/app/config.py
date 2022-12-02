@@ -1,4 +1,4 @@
-from os import path
+from os import path, getcwd
 
 # folder structure
 # └─ tasks
@@ -18,3 +18,7 @@ from os import path
 #    ├── task_id_1
 #    └── ...
 tasks_dir = path.expanduser("~/tasks")
+
+colmap_tmp_dir = path.expanduser("~/.colmap-tmp")
+
+colmap_script = path.join(getcwd(), path.pardir, 'scripts', 'colmap2nerf.py')
