@@ -64,9 +64,12 @@ class TaskManager:
                         execution_strategy.preprocess(task),
                         timeout=execution_strategy.preprocess_timeout())
                 task.status = TaskStatus.TRAINING
-                await asyncio.wait_for(
+                try: 
+                    await asyncio.wait_for(
                         execution_strategy.train(task),
                         timeout=execution_strategy.train_timeout())
+                except asyncio.TimeoutError:
+                    print("training timed out, moving onto rendering")
                 task.status = TaskStatus.RENDERING
                 await asyncio.wait_for(
                         execution_strategy.render(task),

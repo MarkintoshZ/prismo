@@ -68,12 +68,12 @@ async def get_task_output(task_id: str):
 @app.post("/tasks")
 async def post_tasks(
     file: UploadFile = File(""),
-    strategy: ExecutionStrategy = "nerfacto"
+    strategy: ExecutionStrategy = ExecutionStrategy.nerfacto,
 ):
-    if strategy in {"nerfacto", "instant_ngp", "vanilla_nerf"}:
+    if strategy in {"nerfacto", "instant-ngp", "vanilla-nerf"}:
         task = Task.new(strategy)
     else:
-        raise HTTPException(status_code=400, detail='"strategy" must be either "nerfacto", "instant_ngp", "vanilla_nerf".')
+        raise HTTPException(status_code=400, detail='"strategy" must be either "nerfacto", "instant-ngp", "vanilla-nerf".')
 
     if file.content_type in {"video/quicktime", "video/mp4"}:
         task.upload_video(file)

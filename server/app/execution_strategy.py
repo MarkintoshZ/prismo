@@ -95,6 +95,7 @@ class NerfactoStrategy(ExecutionStrategy):
         args = f"""
             nerfacto
             --data {task.dataset_dir()}
+            --trainer.max-num-iterations 17000
             --output-dir {task.model_dir()}
             """
         await cls.exec_program(task, "ns-train", *args.split())
